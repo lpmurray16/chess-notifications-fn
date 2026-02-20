@@ -4,34 +4,39 @@ const PocketBase = require("pocketbase/cjs");
 
 admin.initializeApp();
 
-// Initialize PocketBase
 const pb = new PocketBase("https://simple-chess-pb-backend.fly.dev");
 
 exports.sendTurnNotification = functions.https.onCall(async (data, context) => {
     // --- START OF NEW DEBUGGING CODE ---
-    // Safely log the incoming data without crashing on circular structures.
     console.log("Function triggered.");
-    if (data) {
-        console.log("Received data object with keys:", Object.keys(data));
-        console.log("Value of data.opponentId:", data.opponentId);
+    // Log the whole data object without stringify
+    console.log("Received 'data' argument:", data);
+    // Log the keys of the context object
+    if (context) {
+        console.log("Received 'context' argument with keys:", Object.keys(context));
+        // Specifically log the auth object
+        console.log("Value of context.auth:", context.auth);
     } else {
-        console.log("Received no data object.");
+        console.log("Received no 'context' argument.");
     }
     // --- END OF NEW DEBUGGING CODE ---
 
     // Check for authentication
-    if (!context.auth) {
+    if (!context || !context.auth) { // Make the check more robust
         throw new functions.https.HttpsError(
             "unauthenticated",
             "The function must be called while authenticated."
         );
     }
 
-    const { opponentId } = data;
+    // Safely extract opponentId from a potentially nested structure
+    const opponentId = data.data ? data.data.opponentId : data.opponentId;
+    console.log("Extracted opponentId:", opponentId);
+
 
     // Validate opponentId
     if (!opponentId) {
-        console.error("Validation failed: opponentId is missing or falsy.");
+        console.error("Validation failed: opponentId is missing or falsy after attempting extraction.");
         throw new functions.https.HttpsError(
             "invalid-argument",
             "The function must be called with an 'opponentId'."
@@ -39,7 +44,6 @@ exports.sendTurnNotification = functions.https.onCall(async (data, context) => {
     }
 
     try {
-        // Get the opponent's push subscription from PocketBase
         const subscriptionRecord = await pb.collection('push_subscriptions').getFirstListItem(
             `user = "${opponentId}"`,
             { sort: '-created' }
@@ -59,11 +63,9 @@ exports.sendTurnNotification = functions.https.onCall(async (data, context) => {
             return { success: true };
         } else {
             console.log("No push subscription found for opponent:", opponentId);
-            // This is a valid case, not an error. The user just doesn't have notifications enabled.
             return { success: false, error: "No subscription found." };
         }
     } catch (error) {
-        // This will now catch the error from PocketBase if the record is not found.
         console.error("Error sending notification or querying PocketBase:", error);
         if (error.response && error.response.data) {
             console.error("PocketBase error details:", error.response.data);
