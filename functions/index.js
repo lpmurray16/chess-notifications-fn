@@ -6,41 +6,29 @@ admin.initializeApp();
 
 const pb = new PocketBase("https://simple-chess-pb-backend.fly.dev");
 
-exports.sendTurnNotification = functions.https.onCall(async (data, context) => {
-    // --- START OF NEW DEBUGGING CODE ---
-    console.log("Function triggered.");
-    // Log the whole data object without stringify
-    console.log("Received 'data' argument:", data);
-    // Log the keys of the context object
-    if (context) {
-        console.log("Received 'context' argument with keys:", Object.keys(context));
-        // Specifically log the auth object
-        console.log("Value of context.auth:", context.auth);
-    } else {
-        console.log("Received no 'context' argument.");
-    }
-    // --- END OF NEW DEBUGGING CODE ---
-
-    // Check for authentication
-    if (!context || !context.auth) { // Make the check more robust
-        throw new functions.https.HttpsError(
-            "unauthenticated",
-            "The function must be called while authenticated."
-        );
+// Change to onRequest to make it a public HTTP function
+exports.sendTurnNotification = functions.https.onRequest(async (req, res) => {
+    // Handle CORS preflight requests
+    res.set('Access-Control-Allow-Origin', '*');
+    if (req.method === 'OPTIONS') {
+        res.set('Access-Control-Allow-Methods', 'POST');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.set('Access-Control-Max-Age', '3600');
+        res.status(204).send('');
+        return;
     }
 
-    // Safely extract opponentId from a potentially nested structure
-    const opponentId = data.data ? data.data.opponentId : data.opponentId;
-    console.log("Extracted opponentId:", opponentId);
+    // We are now using onRequest, so we manually parse the body.
+    // The client sends { data: { opponentId: '...' } }
+    const opponentId = req.body.data.opponentId;
 
+    console.log("Function triggered. Extracted opponentId:", opponentId);
 
     // Validate opponentId
     if (!opponentId) {
-        console.error("Validation failed: opponentId is missing or falsy after attempting extraction.");
-        throw new functions.https.HttpsError(
-            "invalid-argument",
-            "The function must be called with an 'opponentId'."
-        );
+        console.error("Validation failed: opponentId is missing.");
+        res.status(400).send({ error: { message: "The function must be called with an 'opponentId'." } });
+        return;
     }
 
     try {
@@ -58,21 +46,22 @@ exports.sendTurnNotification = functions.https.onCall(async (data, context) => {
                     icon: "https://simple-chess-pb-backend.fly.dev/api/files/pbc_1863359460/b7u08j3303au1es/horse_icon_512_512_Gji32a61iR.png"
                 }
             };
+            // Note: sendToDevice is deprecated, consider send() with a token list
             await admin.messaging().sendToDevice(subscription.endpoint, payload);
             console.log("Successfully sent notification to opponent:", opponentId);
-            return { success: true };
+            res.status(200).send({ data: { success: true } });
         } else {
             console.log("No push subscription found for opponent:", opponentId);
-            return { success: false, error: "No subscription found." };
+            res.status(200).send({ data: { success: false, error: "No subscription found." } });
         }
     } catch (error) {
         console.error("Error sending notification or querying PocketBase:", error);
-        if (error.response && error.response.data) {
-            console.error("PocketBase error details:", error.response.data);
+        // Check if the error is from PocketBase saying "not found"
+        if (error.status === 404) {
+             console.log("No push subscription found for opponent (PocketBase 404):", opponentId);
+             res.status(200).send({ data: { success: false, error: "No subscription found." } });
+        } else {
+            res.status(500).send({ error: { message: "Failed to send notification." } });
         }
-        throw new functions.https.HttpsError(
-            "internal",
-            "Failed to send notification."
-        );
     }
 });
